@@ -1,0 +1,34 @@
+title Architecture Diagram
+direction right
+styleMode plain
+typeface clean
+
+Client [icon: user]
+Load Balancer [icon: aws-elastic-load-balancing]
+
+Services {
+  URL Service [icon: link]
+  Redirect Service [icon: corner-up-right]
+}
+
+Cache [icon: zap]
+URL Database [icon: database]
+Event Queue [icon: queue]
+Analytics Worker [icon: gear]
+Analytics Database [icon: database]
+
+Client > Load Balancer
+
+Load Balancer > URL Service: POST /urls
+URL Service > URL Database: Save short-code mapping
+URL Service > Cache: Cache mapping
+URL Service > Client: Return short URL
+
+Load Balancer > Redirect Service: GET /{shortCode}
+Redirect Service > Cache: Look up destination
+Redirect Service > URL Database: Cache miss
+Redirect Service > Client: Redirect to destination
+
+Redirect Service > Event Queue: Click event
+Event Queue > Analytics Worker
+Analytics Worker > Analytics Database
