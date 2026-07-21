@@ -1,0 +1,26 @@
+title Step 2 — Outbound Payment, Happy Path
+
+Service [color: green] {
+  Payments API [icon: server]
+  Posting Engine [icon: cpu]
+  Partner Adapter [icon: repeat]
+}
+
+Ledger DB [icon: postgresql, color: purple] {
+  accounts [icon: table]
+  ledger_entries [icon: table]
+  balances [icon: table]
+  payments [icon: table]
+}
+
+External [color: red] {
+  BaaS Partner [icon: credit-card]
+}
+
+Payments API > Posting Engine: pay bill
+Posting Engine > Ledger DB: CASH to PENDING_OUT, insert payment
+Posting Engine > Partner Adapter: submit transfer
+Partner Adapter > BaaS Partner: ACH debit
+BaaS Partner > Partner Adapter: settled callback
+Partner Adapter > Posting Engine: settle
+Posting Engine > Ledger DB: PENDING_OUT to PARTNER_CASH
