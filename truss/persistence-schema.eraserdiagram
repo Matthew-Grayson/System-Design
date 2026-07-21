@@ -73,16 +73,6 @@ payments [icon: send, color: teal] {
   created_at timestamptz
 }
 
-// Many-to-many: one payment covers 40 bills, one bill can be
-// paid across several payments.
-payment_allocations [icon: git-merge, color: teal] {
-  id uuid pk
-  payment_id uuid
-  bill_id uuid
-  invoice_id uuid
-  amount bigint
-}
-
 // A return is a new fact, not a mutation. Drives the
 // compensating postings.
 payment_returns [icon: corner-up-left, color: red] {
@@ -92,6 +82,19 @@ payment_returns [icon: corner-up-left, color: red] {
   reason varchar
   reversal_transaction_id uuid
   returned_at timestamptz
+}
+
+// ============ STEP 4: batching and approvals ============
+
+// Many-to-many: one payment covers 40 bills, one bill can be
+// paid across several payments. invoice_id is the step 5 half —
+// one customer check applying across several invoices.
+payment_allocations [icon: git-merge, color: teal] {
+  id uuid pk
+  payment_id uuid
+  bill_id uuid
+  invoice_id uuid
+  amount bigint
 }
 
 approvals [icon: check-square, color: yellow] {
@@ -181,10 +184,10 @@ outbox [icon: rss, color: gray] {
 ledger_entries.account_id > accounts.id
 balances.account_id - accounts.id
 bills.vendor_id > vendors.id
+payment_returns.payment_id > payments.id
 payment_allocations.payment_id > payments.id
 payment_allocations.bill_id > bills.id
 payment_allocations.invoice_id > invoices.id
-payment_returns.payment_id > payments.id
 approvals.payment_id > payments.id
 cards.id < card_auths.card_id
 card_auths.reserve_account_id > accounts.id
