@@ -1,0 +1,15 @@
+title Step 1 — Ledger Core
+
+Service [color: green] {
+  Ledger API [icon: server]
+  Posting Engine [icon: cpu]
+}
+
+Ledger DB [icon: postgresql, color: purple] {
+  accounts [icon: table]
+  ledger_entries [icon: table]
+  balances [icon: table]
+}
+
+Ledger API > Posting Engine: post transaction
+Posting Engine > Ledger DB: append legs, update balances

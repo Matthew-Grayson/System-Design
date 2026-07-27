@@ -1,0 +1,196 @@
+title Truss Persistence Schema — Append-Only Double-Entry Ledger
+
+// ============ STEP 1: the core. Everything else hangs off this. ============
+
+// Customer money is a LIABILITY. Cash at the partner bank is the
+// ASSET. PENDING_OUT holds funds that left a balance but have not
+// settled at the bank yet.
+accounts [icon: user, color: blue] {
+  id uuid pk
+  owner_type enum "business | platform | partner | world"
+  owner_id uuid
+  kind enum "CASH | PENDING_OUT | CARD_RESERVE | PARTNER_CASH | FEE_REVENUE | WORLD"
+  created_at timestamptz
+}
+
+// Source of truth. Append-only: no UPDATE, no DELETE. Every
+// transaction_id groups >= 2 legs summing to zero.
+ledger_entries [icon: list, color: green] {
+  id bigserial pk
+  transaction_id uuid
+  account_id uuid
+  amount bigint "signed cents"
+  operation enum "deposit | payment_submit | payment_settle | payment_return | invoice_collect | card_auth | card_settle | fee"
+  reference_type enum "payment | invoice | card_auth | adjustment"
+  reference_id uuid
+  created_at timestamptz
+}
+
+// Materialized cache, written in the SAME txn as the legs.
+// Never authoritative — reconciliation re-derives from legs.
+balances [icon: database, color: purple] {
+  account_id uuid pk
+  amount bigint
+  version bigint "optimistic concurrency"
+  updated_at timestamptz
+}
+
+// ============ STEP 2-3: payables, submission, returns ============
+
+bills [icon: file-text, color: orange] {
+  id uuid pk
+  business_id uuid
+  vendor_id uuid
+  bill_number varchar
+  gross_amount bigint
+  retainage_amount bigint "withheld until project completion"
+  due_date date
+  status enum "DRAFT | APPROVED | PARTIALLY_PAID | PAID | VOID"
+  created_at timestamptz
+}
+
+vendors [icon: truck, color: orange] {
+  id uuid pk
+  business_id uuid
+  name varchar
+  partner_counterparty_id varchar "token at BaaS partner, never raw account numbers"
+  created_at timestamptz
+}
+
+// The AP state machine. status is NOT terminal at SETTLED —
+// an ACH return can arrive days later.
+payments [icon: send, color: teal] {
+  id uuid pk
+  business_id uuid
+  direction enum "OUTBOUND | INBOUND"
+  method enum "ACH | WIRE | CHECK | CARD"
+  amount bigint
+  status enum "DRAFT | APPROVED | SCHEDULED | SUBMITTED | SETTLED | RETURNED | CANCELLED"
+  scheduled_for date
+  partner_transfer_id varchar "idempotency token sent to partner"
+  submitted_at timestamptz
+  settled_at timestamptz
+  created_at timestamptz
+}
+
+// A return is a new fact, not a mutation. Drives the
+// compensating postings.
+payment_returns [icon: corner-up-left, color: red] {
+  id uuid pk
+  payment_id uuid
+  return_code varchar "R01 insufficient funds, R03 no account"
+  reason varchar
+  reversal_transaction_id uuid
+  returned_at timestamptz
+}
+
+// ============ STEP 4: batching and approvals ============
+
+// Many-to-many: one payment covers 40 bills, one bill can be
+// paid across several payments. invoice_id is the step 5 half —
+// one customer check applying across several invoices.
+payment_allocations [icon: git-merge, color: teal] {
+  id uuid pk
+  payment_id uuid
+  bill_id uuid
+  invoice_id uuid
+  amount bigint
+}
+
+approvals [icon: check-square, color: yellow] {
+  id uuid pk
+  payment_id uuid
+  approver_id uuid
+  threshold_cents bigint "PM under 10k, owner above"
+  decision enum "APPROVED | REJECTED"
+  decided_at timestamptz
+}
+
+// ============ STEP 5: receivables ============
+
+invoices [icon: file-plus, color: green] {
+  id uuid pk
+  business_id uuid
+  customer_id uuid
+  gross_amount bigint
+  amount_applied bigint
+  due_date date
+  status enum "DRAFT | SENT | PARTIALLY_PAID | PAID | VOID"
+  created_at timestamptz
+}
+
+// ============ STEP 6: cards ============
+
+cards [icon: credit-card, color: blue] {
+  id uuid pk
+  business_id uuid
+  holder_name varchar
+  form_factor enum "VIRTUAL | PHYSICAL"
+  spend_limit_cents bigint
+  limit_window enum "PER_TXN | DAILY | MONTHLY"
+  status enum "ACTIVE | FROZEN | CLOSED"
+  created_at timestamptz
+}
+
+// Auth reserves funds; settlement amount often differs
+// (fuel preauth $1 settles $400).
+card_auths [icon: lock, color: blue] {
+  id uuid pk
+  card_id uuid
+  reserve_account_id uuid
+  authorized_amount bigint
+  settled_amount bigint
+  merchant_name varchar
+  status enum "PENDING | SETTLED | REVERSED | EXPIRED"
+  expires_at timestamptz
+  created_at timestamptz
+}
+
+// ============ Cross-cutting ============
+
+// The partner's ledger, ingested daily. Reconciliation diffs
+// this against ours. On disagreement, THIS side wins on cash.
+partner_transactions [icon: cloud-download, color: gray] {
+  id uuid pk
+  partner_transfer_id varchar
+  amount bigint
+  partner_status varchar
+  posted_at timestamptz
+  matched_payment_id uuid
+  match_status enum "MATCHED | UNMATCHED | DISPUTED"
+  ingested_at timestamptz
+}
+
+idempotency_keys [icon: key, color: yellow] {
+  key varchar pk
+  scope enum "payment | invoice | card | adjustment"
+  request_hash varchar "catches key reuse with different body"
+  status enum "IN_PROGRESS | SUCCEEDED | FAILED_RETRYABLE"
+  transaction_id uuid
+  response_body jsonb
+  created_at timestamptz
+  expires_at timestamptz
+}
+
+outbox [icon: rss, color: gray] {
+  id bigserial pk
+  transaction_id uuid
+  event_type varchar
+  payload jsonb
+  published_at timestamptz
+}
+
+// ---------------- Relationships ----------------
+ledger_entries.account_id > accounts.id
+balances.account_id - accounts.id
+bills.vendor_id > vendors.id
+payment_returns.payment_id > payments.id
+payment_allocations.payment_id > payments.id
+payment_allocations.bill_id > bills.id
+payment_allocations.invoice_id > invoices.id
+approvals.payment_id > payments.id
+cards.id < card_auths.card_id
+card_auths.reserve_account_id > accounts.id
+partner_transactions.matched_payment_id > payments.id
+idempotency_keys.transaction_id > ledger_entries.transaction_id
+outbox.transaction_id > ledger_entries.transaction_id
